@@ -738,12 +738,15 @@ async function detectResistorsYOLO(inputCanvas, isStatic = false) {
   const outputName = yoloSession.outputNames[0];
   const outputTensor = results[outputName];
   
-  // 3. Postprocess (conf threshold = 0.35, iou = 0.45)
-  const confThreshold = 0.35;
+  // 3. Postprocess (conf threshold lowered for undertrained model)
+  const confThreshold = 0.03;
   const iouThreshold = 0.45;
   const detections = postprocessYolo(outputTensor, width, height, 512, confThreshold, iouThreshold);
   
-  if (isStatic) logDebug(`AI 검출 후보군: ${detections.length}개`, 'info');
+  if (isStatic) {
+    const maxScore = detections.length > 0 ? Math.max(...detections.map(d => d.score)) : 0;
+    logDebug(`AI 검출 후보군: ${detections.length}개 (최고 신뢰도: ${maxScore.toFixed(4)}, 임계값: ${confThreshold})`, 'info');
+  }
   
   // 4. For each bbox, crop and find exact rotated rect and extract color bands
   const finalDetections = [];
@@ -807,6 +810,12 @@ async function processVideoFrameAsync(timestamp) {
       if (detectionMode === 'yolo') {
         if (isYoloModelReady) {
           detections = await detectResistorsYOLO(canvas);
+          if (detections.length === 0) {
+            // Auto-fallback to OpenCV when YOLO finds nothing
+            let src = cv.imread(canvas);
+            detections = detectResistorsCV(src);
+            src.delete();
+          }
         } else {
           // Fallback to OpenCV if YOLO not ready yet
           let src = cv.imread(canvas);
@@ -856,6 +865,10 @@ async function processStaticImage(image) {
     if (detectionMode === 'yolo') {
       if (isYoloModelReady) {
         detections = await detectResistorsYOLO(canvas, true);
+        if (detections.length === 0) {
+          logDebug('YOLO AI 검출 결과가 없어 OpenCV 스캔으로 자동 전환합니다.', 'warn');
+          detections = detectResistorsCV(src);
+        }
       } else {
         logDebug('YOLOv8 AI 모델이 아직 준비되지 않아 OpenCV 스캔으로 대체합니다.', 'warn');
         detections = detectResistorsCV(src);
