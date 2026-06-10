@@ -69,7 +69,7 @@
     <!-- OpenCV compilation status banner -->
     <div id="opencv-banner" class="status-banner loading">
       <div class="spinner"></div>
-      <span id="opencv-status-text">OpenCV.js 이미지 엔진을 로딩하고 있습니다... (약 5-10초 소요)</span>
+      <span id="opencv-status-text">OpenCV.js 이미지 엔진을 로딩하고 있습니다... (최초 1회만 다운로드되며, 이후에는 로컬에 저장되어 즉시 실행됩니다)</span>
     </div>
 
     <!-- Main Content -->
@@ -375,7 +375,7 @@
   </script>
   
   <!-- OpenCV.js from a robust Webassembly CDN -->
-  <script async src="https://cdn.jsdelivr.net/npm/@techstarnepal/opencv.js@4.5.4/opencv.js" type="text/javascript"></script>
+  <script async src="https://cdn.jsdelivr.net/npm/@techstark/opencv-js@4.9.0/dist/opencv.js" type="text/javascript"></script>
 
   <!-- Application JS Modules -->
   <script type="module" src="app.js"></script>
