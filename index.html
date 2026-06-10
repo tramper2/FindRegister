@@ -1,0 +1,383 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>FindRegister - 스마트 저항 식별기 & 생성기</title>
+  <meta name="description" content="카메라와 사진 업로드를 통해 저항을 실시간으로 감지하고 저항값을 읽어주는 스마트 웹 도구입니다. 저항값 입력 시 색띠 이미지 자동 생성 기능도 제공합니다.">
+  
+  <!-- Google Fonts: Outfit & Inter -->
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&family=Outfit:wght@400;500;600;700;800&display=swap" rel="stylesheet">
+  
+  <!-- Main Stylesheet -->
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  
+  <!-- Ambient background glow elements -->
+  <div class="glow-bg">
+    <div class="glow-sphere glow-blue"></div>
+    <div class="glow-sphere glow-purple"></div>
+  </div>
+
+  <!-- App Wrapper -->
+  <div class="app-container">
+    
+    <!-- Header -->
+    <header class="app-header">
+      <div class="logo-area">
+        <!-- Resistor Neon Icon SVG -->
+        <svg class="logo-icon" viewBox="0 0 64 64" fill="none" xmlns="http://www.w3.org/2000/svg">
+          <path d="M8 32H20M44 32H56" stroke="#00d2ff" stroke-width="4" stroke-linecap="round"/>
+          <rect x="20" y="20" width="24" height="24" rx="6" fill="#1b1d28" stroke="#00d2ff" stroke-width="4"/>
+          <line x1="26" y1="20" x2="26" y2="44" stroke="#ff4b4b" stroke-width="3"/>
+          <line x1="32" y1="20" x2="32" y2="44" stroke="#ffb800" stroke-width="3"/>
+          <line x1="38" y1="20" x2="38" y2="44" stroke="#00ff66" stroke-width="3"/>
+        </svg>
+        <div class="logo-text">
+          <h1>FindRegister</h1>
+          <p>Smart Resistor Scanner & Generator</p>
+        </div>
+      </div>
+      
+      <!-- Navigation Tabs -->
+      <nav class="app-nav">
+        <button class="nav-tab active" id="tab-scanner" data-target="panel-scanner">
+          <svg class="nav-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <path d="M23 19a2 2 0 0 1-2 2H3a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h4l2-3h6l2 3h4a2 2 0 0 1 2 2z"/>
+            <circle cx="12" cy="13" r="4"/>
+          </svg>
+          저항 식별 (카메라/사진)
+        </button>
+        <button class="nav-tab" id="tab-generator" data-target="panel-generator">
+          <svg class="nav-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <path d="M12 20h9M16.5 3.5a2.121 2.121 0 0 1 3 3L7 19l-4 1 1-4L16.5 3.5z"/>
+          </svg>
+          저항 생성 (값 ➔ 색띠)
+        </button>
+        <button class="nav-tab" id="tab-reference" data-target="panel-reference">
+          <svg class="nav-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <path d="M4 19.5A2.5 2.5 0 0 1 6.5 17H20M4 19.5A2.5 2.5 0 0 0 6.5 22H20F4 19.5V3.5A2.5 2.5 0 0 1 6.5 1H20v20H6.5a2.5 2.5 0 0 1-2.5-2.5z"/>
+          </svg>
+          색띠 조견표
+        </button>
+      </nav>
+    </header>
+
+    <!-- OpenCV compilation status banner -->
+    <div id="opencv-banner" class="status-banner loading">
+      <div class="spinner"></div>
+      <span id="opencv-status-text">OpenCV.js 이미지 엔진을 로딩하고 있습니다... (약 5-10초 소요)</span>
+    </div>
+
+    <!-- Main Content -->
+    <main class="app-main">
+
+      <!-- ================= SCANNER PANEL ================= -->
+      <section id="panel-scanner" class="tab-panel active">
+        <div class="scanner-grid">
+          
+          <!-- Viewport Column -->
+          <div class="viewport-card card">
+            <div class="card-header">
+              <h2>카메라 뷰포트</h2>
+              <div class="scanner-indicator" id="scanner-indicator">
+                <span class="indicator-dot blinking"></span>
+                <span id="indicator-text">스캔 대기 중</span>
+              </div>
+            </div>
+            
+            <div class="viewport-container">
+              <!-- Video Stream (hidden from sight, read into canvas) -->
+              <video id="video" autoplay playsinline muted></video>
+              
+              <!-- Drawing & Processing Canvas -->
+              <canvas id="canvas"></canvas>
+              
+              <!-- Scan target box overlay -->
+              <div class="scanner-overlay" id="scanner-overlay">
+                <div class="scanner-guide-box">
+                  <div class="corner top-left"></div>
+                  <div class="corner top-right"></div>
+                  <div class="corner bottom-left"></div>
+                  <div class="corner bottom-right"></div>
+                  <p class="guide-text">여기에 저항을 위치시키면 색상이 더 잘 식별됩니다</p>
+                </div>
+              </div>
+              
+              <!-- Loading/Status Placeholder Overlay -->
+              <div class="viewport-placeholder" id="viewport-placeholder">
+                <div class="placeholder-content">
+                  <svg class="placeholder-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5">
+                    <path d="M23 19a2 2 0 0 1-2 2H3a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h4l2-3h6l2 3h4a2 2 0 0 1 2 2z"/>
+                    <circle cx="12" cy="13" r="4"/>
+                  </svg>
+                  <p>카메라를 켜거나 사진을 업로드해 주세요</p>
+                </div>
+              </div>
+            </div>
+
+            <!-- Viewport Controls -->
+            <div class="viewport-controls">
+              <!-- Start/Pause camera button -->
+              <button class="btn btn-primary" id="btn-toggle-camera" disabled>
+                <svg viewBox="0 0 24 24" fill="currentColor" class="btn-icon">
+                  <path d="M8 5v14l11-7z"/>
+                </svg>
+                <span>카메라 켜기</span>
+              </button>
+              
+              <!-- Switch camera (front/back) -->
+              <button class="btn btn-secondary" id="btn-switch-camera" disabled>
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" class="btn-icon">
+                  <path d="M21.5 2v6h-6M21.34 15.57a10 10 0 1 1-.57-8.38l5.67-5.67"/>
+                </svg>
+                <span>카메라 전환</span>
+              </button>
+              
+              <!-- Flashlight / Torch toggle -->
+              <button class="btn btn-secondary" id="btn-toggle-torch" disabled>
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" class="btn-icon">
+                  <path d="M13 2L3 14h9l-1 8 10-12h-9l1-8z"/>
+                </svg>
+                <span>플래시</span>
+              </button>
+
+              <!-- Upload file button -->
+              <label class="btn btn-secondary upload-btn">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" class="btn-icon">
+                  <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4M17 8l-5-5-5 5M12 3v12"/>
+                </svg>
+                <span>사진 업로드</span>
+                <input type="file" id="file-upload" accept="image/*">
+              </label>
+            </div>
+          </div>
+          
+          <!-- Results & Calibrations Column -->
+          <div class="results-column">
+            
+            <!-- Resistor Detail card (displays when clicking a detected resistor bounding box) -->
+            <div class="card detail-card" id="resistor-detail-card" style="display: none;">
+              <div class="card-header">
+                <h2>선택된 저항 상세 정보</h2>
+                <button class="btn-close" id="btn-close-detail">&times;</button>
+              </div>
+              <div class="detail-body">
+                <div class="detail-value-display">
+                  <span class="value-text" id="detail-ohms-value">100 Ω</span>
+                  <span class="tolerance-text" id="detail-tolerance-value">±5%</span>
+                </div>
+                
+                <div class="detail-bands-row" id="detail-bands-row">
+                  <!-- Bands will be generated dynamically -->
+                </div>
+                
+                <div class="detail-actions">
+                  <button class="btn btn-secondary btn-sm" id="btn-flip-resistor">
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" class="btn-icon" style="width: 14px; height: 14px;">
+                      <path d="M17 1l4 4-4 4M3 11V9a4 4 0 0 1 4-4h14M7 23l-4-4 4-4M21 13v2a4 4 0 0 1-4 4H3"/>
+                    </svg>
+                    읽는 방향 반전
+                  </button>
+                  <button class="btn btn-secondary btn-sm" id="btn-apply-to-generator">
+                    생성기로 내보내기
+                  </button>
+                </div>
+
+                <div class="detail-manual-edit">
+                  <h3>색띠 수동 보정</h3>
+                  <div class="manual-bands-grid" id="manual-bands-selectors">
+                    <!-- Color dropdowns will be rendered dynamically -->
+                  </div>
+                </div>
+              </div>
+            </div>
+
+            <!-- Detected List Card -->
+            <div class="card list-card">
+              <div class="card-header">
+                <h2>검출된 저항 목록 (<span id="detected-count">0</span>)</h2>
+                <button class="btn btn-secondary btn-xs" id="btn-clear-list">비우기</button>
+              </div>
+              <div class="detected-list-container" id="detected-list">
+                <div class="empty-list-msg">
+                  <p>화면에 저항을 비추거나 사진을 올려주세요. 자동으로 검출을 시작합니다.</p>
+                </div>
+              </div>
+            </div>
+
+            <!-- Camera Tuning Card -->
+            <div class="card tuning-card">
+              <div class="card-header">
+                <h2>화질 및 감도 튜닝</h2>
+                <button class="btn-toggle-collapse" id="btn-toggle-tuning-collapse">접기</button>
+              </div>
+              <div class="tuning-body" id="tuning-body">
+                <div class="tuning-control">
+                  <label for="slide-brightness">밝기 (Brightness)</label>
+                  <input type="range" id="slide-brightness" min="-50" max="50" value="0">
+                  <span class="tuning-value" id="val-brightness">0</span>
+                </div>
+                <div class="tuning-control">
+                  <label for="slide-contrast">대비 (Contrast)</label>
+                  <input type="range" id="slide-contrast" min="50" max="200" value="100">
+                  <span class="tuning-value" id="val-contrast">100%</span>
+                </div>
+                <div class="tuning-control">
+                  <label for="slide-saturation">색포화도 (Saturation)</label>
+                  <input type="range" id="slide-saturation" min="50" max="250" value="100">
+                  <span class="tuning-value" id="val-saturation">100%</span>
+                </div>
+                <div class="tuning-control">
+                  <label for="select-color-space">감지 모드</label>
+                  <select id="select-color-space">
+                    <option value="both">황토색 & 파란색/녹색 저항 모두 감지</option>
+                    <option value="tan">황토색(일반) 저항 전용</option>
+                    <option value="blue">파란색/녹색(정밀) 저항 전용</option>
+                  </select>
+                </div>
+                <div class="tuning-info">
+                  <p>💡 실내 조명이 어둡거나 반사가 심할 경우 밝기와 대비를 미세조정하면 오차율을 줄일 수 있습니다.</p>
+                </div>
+              </div>
+            </div>
+
+          </div>
+        </div>
+      </section>
+
+      <!-- ================= GENERATOR PANEL ================= -->
+      <section id="panel-generator" class="tab-panel">
+        <div class="generator-container card">
+          <div class="card-header">
+            <h2>저항 색띠 생성기</h2>
+            <p>원하는 저항값을 입력하면 그에 맞는 저항 색띠 그래픽을 그려줍니다.</p>
+          </div>
+          
+          <div class="generator-layout">
+            <!-- Left Side: Controls -->
+            <div class="generator-controls">
+              <div class="input-group">
+                <label for="input-resistance">찾고 싶은 저항값 입력</label>
+                <div class="input-with-btn">
+                  <input type="text" id="input-resistance" placeholder="예: 100, 2.2k, 470k, 1M5" value="100">
+                  <button class="btn btn-primary" id="btn-generate">그리기</button>
+                </div>
+                <small class="input-tip">단위 생략 시 옴(Ω)으로 처리됩니다. r, k, m, g 접미사를 지원합니다.</small>
+              </div>
+
+              <div class="settings-row">
+                <div class="settings-group">
+                  <label>색띠 개수 선택</label>
+                  <div class="toggle-buttons">
+                    <button class="btn-toggle active" id="btn-band-4" data-bands="4">4색띠</button>
+                    <button class="btn-toggle" id="btn-band-5" data-bands="5">5색띠</button>
+                  </div>
+                </div>
+
+                <div class="settings-group">
+                  <label for="select-tolerance">오차율 (Tolerance)</label>
+                  <select id="select-tolerance">
+                    <option value="5">±5% (금색 - 표준)</option>
+                    <option value="1" selected>±1% (갈색 - 정밀)</option>
+                    <option value="2">±2% (빨간색)</option>
+                    <option value="10">±10% (은색)</option>
+                    <option value="0.5">±0.5% (초록색)</option>
+                    <option value="0.25">±0.25% (파란색)</option>
+                    <option value="0.1">±0.1% (보라색)</option>
+                  </select>
+                </div>
+              </div>
+              
+              <!-- Suggestions container (shown if custom non-standard value inputted) -->
+              <div class="suggestions-area" id="generator-suggestions-box" style="display: none;">
+                <h4>⚠️ 비표준 저항값입니다. 가장 가까운 표준 저항값(E계열):</h4>
+                <div class="suggestion-chips" id="suggestion-chips">
+                  <!-- Chips generated dynamically -->
+                </div>
+              </div>
+            </div>
+
+            <!-- Right Side: Resistor Visual & Explanation -->
+            <div class="generator-preview-area">
+              
+              <!-- Graphic Wrapper -->
+              <div class="resistor-graphic-container">
+                <div class="resistor-svg-wrapper" id="resistor-svg-container">
+                  <!-- Dynamic SVG will be rendered here -->
+                </div>
+              </div>
+
+              <!-- Value Explanation Card -->
+              <div class="explanation-card" id="value-explanation">
+                <div class="parsed-display">
+                  <span class="value-title">입력값 해석:</span>
+                  <span class="value-ohms" id="parsed-ohms-text">100 Ω</span>
+                  <span class="value-tol" id="parsed-tol-text">±1%</span>
+                </div>
+                
+                <div class="bands-explanation-list" id="bands-exp-list">
+                  <!-- Explanation for each band will be generated dynamically -->
+                </div>
+              </div>
+
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <!-- ================= REFERENCE PANEL ================= -->
+      <section id="panel-reference" class="tab-panel">
+        <div class="card reference-card">
+          <div class="card-header">
+            <h2>저항 색코드 조견표 (Resistor Color Code Reference)</h2>
+            <p>각 색띠가 나타내는 수치, 승수, 오차 범위를 보여주는 공식 일람표입니다.</p>
+          </div>
+          <div class="table-container">
+            <table class="ref-table">
+              <thead>
+                <tr>
+                  <th>색상</th>
+                  <th>첫 번째 숫자 (1st Digit)</th>
+                  <th>두 번째 숫자 (2nd Digit)</th>
+                  <th>세 번째 숫자 (3rd Digit)</th>
+                  <th>승수 (Multiplier)</th>
+                  <th>오차율 (Tolerance)</th>
+                </tr>
+              </thead>
+              <tbody id="reference-table-body">
+                <!-- Rows will be injected dynamically from COLOR_CODES in app.js -->
+              </tbody>
+            </table>
+          </div>
+        </div>
+      </section>
+
+    </main>
+
+    <!-- Footer -->
+    <footer class="app-footer">
+      <p>&copy; 2026 FindRegister Project. Created for web browser client-side detection.</p>
+      <p>배포처: <a href="https://github.com/tramper2/FindRegister" target="_blank">tramper2/FindRegister</a></p>
+    </footer>
+  </div>
+
+  <!-- OpenCV.js load trigger -->
+  <script type="text/javascript">
+    // Define callback before OpenCV loads
+    window.onOpenCvReady = function() {
+      console.log('OpenCV.js is fully ready and loaded!');
+      document.dispatchEvent(new Event('opencvReady'));
+    };
+  </script>
+  
+  <!-- OpenCV.js from a robust Webassembly CDN -->
+  <script async src="https://cdn.jsdelivr.net/npm/@techstarnepal/opencv.js@4.5.4/opencv.js" type="text/javascript"></script>
+
+  <!-- Application JS Modules -->
+  <script type="module" src="app.js"></script>
+</body>
+</html>

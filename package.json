@@ -1,0 +1,10 @@
+{
+  "name": "find-register",
+  "version": "1.0.0",
+  "type": "module",
+  "description": "Resistor Identification Web Application",
+  "scripts": {
+    "test": "node scratch/test_calc.js"
+  },
+  "devDependencies": {}
+}
