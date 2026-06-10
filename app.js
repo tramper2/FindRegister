@@ -484,9 +484,9 @@ function detectResistorsCV(src) {
   const mode = elColorSpace.value;
   
   if (mode === 'tan' || mode === 'both') {
-    // Tan/Beige body range: H: 5-35, S: 25-160, V: 60-255
-    let lowTan = new cv.Mat(hsv.rows, hsv.cols, hsv.type(), [3, 20, 60, 0]);
-    let highTan = new cv.Mat(hsv.rows, hsv.cols, hsv.type(), [33, 170, 255, 0]);
+    // Widen range to cover orange, brown, red, yellow, gold bands on tan body
+    let lowTan = new cv.Mat(hsv.rows, hsv.cols, hsv.type(), [2, 10, 50, 0]);
+    let highTan = new cv.Mat(hsv.rows, hsv.cols, hsv.type(), [38, 255, 255, 0]);
     let maskTan = new cv.Mat();
     cv.inRange(hsv, lowTan, highTan, maskTan);
     
@@ -502,9 +502,9 @@ function detectResistorsCV(src) {
   }
   
   if (mode === 'blue' || mode === 'both') {
-    // Blue/Green body range: H: 35-135, S: 35-255, V: 35-255
-    let lowBlue = new cv.Mat(hsv.rows, hsv.cols, hsv.type(), [34, 30, 40, 0]);
-    let highBlue = new cv.Mat(hsv.rows, hsv.cols, hsv.type(), [135, 255, 255, 0]);
+    // Widen range for blue/green body
+    let lowBlue = new cv.Mat(hsv.rows, hsv.cols, hsv.type(), [35, 15, 35, 0]);
+    let highBlue = new cv.Mat(hsv.rows, hsv.cols, hsv.type(), [140, 255, 255, 0]);
     let maskBlue = new cv.Mat();
     cv.inRange(hsv, lowBlue, highBlue, maskBlue);
     
@@ -521,7 +521,8 @@ function detectResistorsCV(src) {
   
   // 5. Morphological Closing to fill gaps caused by color bands
   let closed = new cv.Mat();
-  let ksize = new cv.Size(9, 9);
+  // Use a larger kernel (21x21) to merge gaps in high-res images
+  let ksize = new cv.Size(21, 21);
   let M = cv.getStructuringElement(cv.MORPH_RECT, ksize);
   cv.morphologyEx(mask, closed, cv.MORPH_CLOSE, M);
   M.delete();
@@ -532,8 +533,8 @@ function detectResistorsCV(src) {
   cv.findContours(closed, contours, hierarchy, cv.RETR_EXTERNAL, cv.CHAIN_APPROX_SIMPLE);
   
   // Minimum aspect ratio and size thresholds
-  // Smaller thresholds on mobile/camera stream to detect small or distant resistors
-  const minArea = canvas.width * canvas.height * 0.0015; // 0.15% of total screen size
+  // Scale dynamically with a cap to support high-res uploads
+  const minArea = Math.min(600, canvas.width * canvas.height * 0.0005);
   
   for (let i = 0; i < contours.size(); i++) {
     let contour = contours.get(i);
@@ -563,7 +564,7 @@ function detectResistorsCV(src) {
     let solidity = area / hullArea;
     hull.delete();
     
-    if (solidity < 0.65 || solidity > 0.95) {
+    if (solidity < 0.60) {
       contour.delete();
       continue;
     }
