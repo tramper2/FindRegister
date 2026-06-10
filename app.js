@@ -525,8 +525,8 @@ function detectResistorsCV(src) {
   if (isStatic) logDebug(`몸체 색상 세그멘테이션 (모드: ${mode === 'both' ? '모두' : mode === 'tan' ? '황토색' : '파란색'})`, 'info');
   
   if (mode === 'tan' || mode === 'both') {
-    // Filter out low-saturation warm cream backgrounds (raising Saturation lower bound to 28)
-    let lowTan = new cv.Mat(hsv.rows, hsv.cols, hsv.type(), [0, 28, 45, 0]);
+    // Filter out low-saturation warm cream backgrounds (raising Saturation lower bound to 35)
+    let lowTan = new cv.Mat(hsv.rows, hsv.cols, hsv.type(), [0, 35, 45, 0]);
     let highTan = new cv.Mat(hsv.rows, hsv.cols, hsv.type(), [38, 255, 255, 0]);
     let maskTan = new cv.Mat();
     cv.inRange(hsv, lowTan, highTan, maskTan);
@@ -600,6 +600,21 @@ function detectResistorsCV(src) {
     let aspect = Math.max(width, height) / Math.min(width, height);
     if (aspect < 2.0 || aspect > 6.5) {
       if (isStatic) logDebug(`[후보 #${i+1}] 면적: ${Math.round(area)}px | ➔ 탈락: 가로세로 비율 불충족 (${aspect.toFixed(2)}배, 기준: 2.0~6.5)`, 'warn');
+      contour.delete();
+      continue;
+    }
+    
+    // Filter out digital neon UI elements/badges (which have extremely high saturation and flat brightness)
+    let cMask = cv.Mat.zeros(hsv.rows, hsv.cols, cv.CV_8UC1);
+    cv.drawContours(cMask, contours, i, new cv.Scalar(255), -1);
+    let meanHSV = cv.mean(hsv, cMask);
+    cMask.delete();
+    
+    let meanSat = meanHSV[1];
+    let meanVal = meanHSV[2];
+    
+    if (meanSat > 180 && meanVal > 245) {
+      if (isStatic) logDebug(`[후보 #${i+1}] 면적: ${Math.round(area)}px | ➔ 탈락: 디지털 UI 요소로 감지됨 (채도: ${meanSat.toFixed(1)}, 명도: ${meanVal.toFixed(1)})`, 'warn');
       contour.delete();
       continue;
     }
@@ -1144,8 +1159,18 @@ function drawDetectionsUI() {
     const metrics = ctx.measureText(text);
     const textWidth = metrics.width;
     
-    const tagX = r.rect.center.x - textWidth / 2;
-    const tagY = r.rect.center.y - r.rect.size.height / 2 - 12;
+    let tagX = r.rect.center.x - textWidth / 2;
+    tagX = Math.max(8, Math.min(canvas.width - textWidth - 8, tagX));
+    
+    let tagY = r.rect.center.y - r.rect.size.height / 2 - 12;
+    if (tagY - 18 < 5) {
+      // Draw below if too close to top
+      tagY = r.rect.center.y + r.rect.size.height / 2 + 22;
+      // Clamp to bottom if it goes off-screen at bottom
+      if (tagY + 8 > canvas.height) {
+        tagY = canvas.height - 8;
+      }
+    }
     
     // Draw label background
     ctx.fillStyle = isSelected ? 'rgba(168, 85, 247, 0.9)' : 'rgba(13, 15, 23, 0.85)';
