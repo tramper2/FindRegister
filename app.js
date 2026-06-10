@@ -485,8 +485,8 @@ function detectResistorsCV(src) {
   
   if (mode === 'tan' || mode === 'both') {
     // Widen range to cover orange, brown, red, yellow, gold bands on tan/pink body
-    let lowTan = new cv.Mat(hsv.rows, hsv.cols, hsv.type(), [0, 8, 40, 0]);
-    let highTan = new cv.Mat(hsv.rows, hsv.cols, hsv.type(), [38, 255, 255, 0]);
+    let lowTan = new cv.Scalar(0, 8, 40);
+    let highTan = new cv.Scalar(38, 255, 255);
     let maskTan = new cv.Mat();
     cv.inRange(hsv, lowTan, highTan, maskTan);
     
@@ -496,15 +496,13 @@ function detectResistorsCV(src) {
       cv.bitwise_or(mask, maskTan, mask);
     }
     
-    lowTan.delete();
-    highTan.delete();
     maskTan.delete();
   }
   
   if (mode === 'blue' || mode === 'both') {
     // Widen range for blue/green body
-    let lowBlue = new cv.Mat(hsv.rows, hsv.cols, hsv.type(), [35, 15, 35, 0]);
-    let highBlue = new cv.Mat(hsv.rows, hsv.cols, hsv.type(), [140, 255, 255, 0]);
+    let lowBlue = new cv.Scalar(35, 15, 35);
+    let highBlue = new cv.Scalar(140, 255, 255);
     let maskBlue = new cv.Mat();
     cv.inRange(hsv, lowBlue, highBlue, maskBlue);
     
@@ -514,8 +512,6 @@ function detectResistorsCV(src) {
       cv.bitwise_or(mask, maskBlue, mask);
     }
     
-    lowBlue.delete();
-    highBlue.delete();
     maskBlue.delete();
   }
   
