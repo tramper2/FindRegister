@@ -84,6 +84,12 @@ const PROCESSING_INTERVAL = 150; // Milliseconds between frames (approx 6-7 FPS 
 let requestAnimationId = null;
 let staticImage = null; // Hold uploaded static image
 
+// YOLOv8 state variables
+let yoloSession = null;
+let isYoloModelLoading = false;
+let isYoloModelReady = false;
+let detectionMode = 'yolo'; // 'yolo' or 'opencv'
+
 // Colors Reference for HTML list
 const COLORS_LIST = Object.keys(COLOR_CODES);
 
@@ -146,6 +152,9 @@ function init() {
 
   // Draw default resistor in generator
   generateResistorSVG(100, false, 1);
+
+  // Load YOLOv8 model by default since we are in YOLO mode
+  loadYoloModel();
 }
 
 // ---------------- TAB NAVIGATION ----------------
@@ -199,6 +208,29 @@ function bindTuning() {
     const isCollapsed = elTuningBody.classList.toggle('collapsed');
     elBtnToggleTuning.textContent = isCollapsed ? '열기' : '접기';
   });
+
+  const elDetectionMode = document.getElementById('select-detection-mode');
+  const elTuningColorSpaceContainer = document.getElementById('tuning-color-space-container');
+
+  if (elDetectionMode) {
+    elDetectionMode.addEventListener('change', (e) => {
+      detectionMode = e.target.value;
+      logDebug(`인식 모델이 변경되었습니다: ${detectionMode === 'yolo' ? 'AI 스캔' : 'OpenCV 스캔'}`, 'info');
+      
+      if (detectionMode === 'yolo') {
+        loadYoloModel();
+        if (elTuningColorSpaceContainer) elTuningColorSpaceContainer.style.display = 'none';
+      } else {
+        if (elTuningColorSpaceContainer) elTuningColorSpaceContainer.style.display = 'block';
+      }
+      triggerStaticReprocess();
+    });
+    
+    // Initial UI state setup for detectionMode
+    if (detectionMode === 'yolo') {
+      if (elTuningColorSpaceContainer) elTuningColorSpaceContainer.style.display = 'none';
+    }
+  }
 }
 
 function triggerStaticReprocess() {
@@ -340,7 +372,7 @@ async function startCamera(deviceId = null) {
     video.onloadedmetadata = () => {
       canvas.width = video.videoWidth;
       canvas.height = video.videoHeight;
-      requestAnimationId = requestAnimationFrame(processVideoFrame);
+      requestAnimationId = requestAnimationFrame(processVideoFrameAsync);
     };
 
   } catch (err) {
@@ -361,7 +393,7 @@ async function startCamera(deviceId = null) {
       video.onloadedmetadata = () => {
         canvas.width = video.videoWidth;
         canvas.height = video.videoHeight;
-        requestAnimationId = requestAnimationFrame(processVideoFrame);
+        requestAnimationId = requestAnimationFrame(processVideoFrameAsync);
       };
     } catch (fallbackErr) {
       alert('카메라에 연결할 수 없습니다: ' + fallbackErr.message);
@@ -432,8 +464,336 @@ function applyTuningFilters(srcMat, dstMat) {
   }
 }
 
-// ---------------- SCANNING LOGIC (OPENCV.JS) ----------------
-function processVideoFrame(timestamp) {
+// ---------------- YOLOv8 AI SCANNING PIPELINE ----------------
+
+async function loadYoloModel() {
+  if (isYoloModelReady || isYoloModelLoading) return;
+  isYoloModelLoading = true;
+  
+  const elYoloBanner = document.getElementById('yolo-banner');
+  const elYoloStatusText = document.getElementById('yolo-status-text');
+  
+  if (elYoloBanner) {
+    elYoloBanner.style.display = 'flex';
+    elYoloBanner.className = 'status-banner loading';
+    elYoloStatusText.textContent = 'YOLOv8 AI 로컬 모델을 로딩하고 있습니다... (약 3.5MB, 최초 1회만 다운로드됩니다)';
+  }
+  
+  logDebug('YOLOv8 AI 로컬 모델 로딩 중...', 'info');
+  
+  try {
+    // Load ONNX model using ort.InferenceSession with WASM provider
+    yoloSession = await ort.InferenceSession.create('models/resistor_yolov8n.onnx', {
+      executionProviders: ['wasm']
+    });
+    
+    isYoloModelReady = true;
+    isYoloModelLoading = false;
+    logDebug('YOLOv8 AI 로컬 모델 로드 완료! 브라우저 WebAssembly 추론이 활성화되었습니다.', 'success');
+    
+    if (elYoloBanner) {
+      elYoloBanner.className = 'status-banner ready';
+      elYoloStatusText.textContent = 'YOLOv8 AI 로컬 모델 로드가 완료되었습니다.';
+      setTimeout(() => {
+        elYoloBanner.style.display = 'none';
+      }, 3000);
+    }
+  } catch (err) {
+    console.error('YOLOv8 model load error:', err);
+    logDebug(`AI 모델 로드 실패: ${err.message || err}`, 'error');
+    isYoloModelLoading = false;
+    if (elYoloBanner) {
+      elYoloBanner.className = 'status-banner error';
+      elYoloStatusText.textContent = 'YOLOv8 AI 모델 로드 실패: ' + (err.message || err);
+    }
+  }
+}
+
+// Preprocess canvas to YOLOv8 input tensor
+function preprocessYolo(canvasElement, targetSize = 512) {
+  const tempCanvas = document.createElement('canvas');
+  tempCanvas.width = targetSize;
+  tempCanvas.height = targetSize;
+  const tempCtx = tempCanvas.getContext('2d');
+  
+  // Draw canvas stretched to targetSize x targetSize
+  tempCtx.drawImage(canvasElement, 0, 0, targetSize, targetSize);
+  
+  const imgData = tempCtx.getImageData(0, 0, targetSize, targetSize).data;
+  const float32Data = new Float32Array(3 * targetSize * targetSize);
+  
+  for (let i = 0; i < targetSize * targetSize; i++) {
+    const idx = i * 4;
+    const r = imgData[idx] / 255.0;
+    const g = imgData[idx + 1] / 255.0;
+    const b = imgData[idx + 2] / 255.0;
+    
+    float32Data[0 * targetSize * targetSize + i] = r;
+    float32Data[1 * targetSize * targetSize + i] = g;
+    float32Data[2 * targetSize * targetSize + i] = b;
+  }
+  
+  return new ort.Tensor('float32', float32Data, [1, 3, targetSize, targetSize]);
+}
+
+// Postprocess YOLOv8 output
+function postprocessYolo(outputTensor, originalWidth, originalHeight, targetSize = 512, confThreshold = 0.35, iouThreshold = 0.45) {
+  const outputData = outputTensor.data; // Float32Array
+  const numAnchors = 5376; // 64x64 + 32x32 + 16x16
+  const candidates = [];
+  
+  const scaleX = originalWidth / targetSize;
+  const scaleY = originalHeight / targetSize;
+  
+  for (let c = 0; c < numAnchors; c++) {
+    // Row 4 is class 0 (resistor) confidence score
+    const score = outputData[4 * numAnchors + c];
+    if (score > confThreshold) {
+      const cx = outputData[0 * numAnchors + c];
+      const cy = outputData[1 * numAnchors + c];
+      const w = outputData[2 * numAnchors + c];
+      const h = outputData[3 * numAnchors + c];
+      
+      const x1 = (cx - w / 2) * scaleX;
+      const y1 = (cy - h / 2) * scaleY;
+      const boxW = w * scaleX;
+      const boxH = h * scaleY;
+      
+      candidates.push({
+        box: [x1, y1, boxW, boxH],
+        score: score
+      });
+    }
+  }
+  
+  return runNMS(candidates, iouThreshold);
+}
+
+function runNMS(candidates, iouThreshold) {
+  candidates.sort((a, b) => b.score - a.score);
+  
+  const kept = [];
+  const suppressed = new Set();
+  
+  for (let i = 0; i < candidates.length; i++) {
+    if (suppressed.has(i)) continue;
+    
+    const current = candidates[i];
+    kept.push(current);
+    
+    for (let j = i + 1; j < candidates.length; j++) {
+      if (suppressed.has(j)) continue;
+      
+      const other = candidates[j];
+      const iou = calculateIoU(current.box, other.box);
+      if (iou > iouThreshold) {
+        suppressed.add(j);
+      }
+    }
+  }
+  
+  return kept;
+}
+
+function calculateIoU(box1, box2) {
+  const [x1, y1, w1, h1] = box1;
+  const [x2, y2, w2, h2] = box2;
+  
+  const xx1 = Math.max(x1, x2);
+  const yy1 = Math.max(y1, y2);
+  const xx2 = Math.min(x1 + w1, x2 + w2);
+  const yy2 = Math.min(y1 + h1, y2 + h2);
+  
+  const interW = Math.max(0, xx2 - xx1);
+  const interH = Math.max(0, yy2 - yy1);
+  const interArea = interW * interH;
+  
+  const area1 = w1 * h1;
+  const area2 = w2 * h2;
+  
+  const unionArea = area1 + area2 - interArea;
+  if (unionArea === 0) return 0;
+  
+  return interArea / unionArea;
+}
+
+// Refine axis-aligned bounding box to a rotated rectangle using OpenCV
+function refineRotatedRect(src, box, id, isStatic = false) {
+  let [bx, by, bw, bh] = box;
+  
+  // Add a small 10% padding margin to bounding box to ensure resistor is fully inside
+  const paddingX = bw * 0.1;
+  const paddingY = bh * 0.1;
+  bx -= paddingX;
+  by -= paddingY;
+  bw += paddingX * 2;
+  bh += paddingY * 2;
+  
+  // Clamp boundaries safely
+  let x = Math.max(0, Math.min(src.cols - 1, Math.round(bx)));
+  let y = Math.max(0, Math.min(src.rows - 1, Math.round(by)));
+  let w = Math.max(5, Math.min(src.cols - x, Math.round(bw)));
+  let h = Math.max(5, Math.min(src.rows - y, Math.round(bh)));
+  
+  let rectRoi = new cv.Rect(x, y, w, h);
+  let crop = src.roi(rectRoi);
+  
+  // 1. Grayscale
+  let gray = new cv.Mat();
+  cv.cvtColor(crop, gray, cv.COLOR_RGBA2GRAY);
+  
+  // 2. Thresholding using Otsu's method to separate resistor body
+  let thresh = new cv.Mat();
+  cv.threshold(gray, thresh, 0, 255, cv.THRESH_BINARY_INV + cv.THRESH_OTSU);
+  
+  // 3. Morphological closing to bridge color bands gaps
+  let closed = new cv.Mat();
+  let ksizeVal = Math.max(3, Math.round(w * 0.08));
+  if (ksizeVal % 2 === 0) ksizeVal += 1; // Make odd
+  let ksize = new cv.Size(ksizeVal, 3);
+  let M = cv.getStructuringElement(cv.MORPH_RECT, ksize);
+  cv.morphologyEx(thresh, closed, cv.MORPH_CLOSE, M);
+  M.delete();
+  
+  // 4. Find contours
+  let contours = new cv.MatVector();
+  let hierarchy = new cv.Mat();
+  cv.findContours(closed, contours, hierarchy, cv.RETR_EXTERNAL, cv.CHAIN_APPROX_SIMPLE);
+  
+  let bestRect = null;
+  if (contours.size() > 0) {
+    let maxArea = -1;
+    let maxIdx = -1;
+    for (let i = 0; i < contours.size(); i++) {
+      let area = cv.contourArea(contours.get(i));
+      if (area > maxArea) {
+        maxArea = area;
+        maxIdx = i;
+      }
+    }
+    
+    if (maxIdx !== -1) {
+      let maxContour = contours.get(maxIdx);
+      let localRect = cv.minAreaRect(maxContour);
+      
+      // Shift coordinates back to original image space
+      bestRect = {
+        center: {
+          x: localRect.center.x + x,
+          y: localRect.center.y + y
+        },
+        size: {
+          width: localRect.size.width,
+          height: localRect.size.height
+        },
+        angle: localRect.angle
+      };
+    }
+  }
+  
+  // Cleanup
+  gray.delete();
+  thresh.delete();
+  closed.delete();
+  contours.delete();
+  hierarchy.delete();
+  crop.delete();
+  
+  // Fallback: if contour fails, return axis-aligned rect as rotated rect with angle=0
+  if (!bestRect) {
+    if (isStatic) {
+      logDebug(`[AI 감지 #${id}] 로컬 윤곽선 감지 실패, 기본 BBox를 사용합니다.`, 'warn');
+    }
+    bestRect = {
+      center: { x: x + w / 2, y: y + h / 2 },
+      size: { width: w, height: h },
+      angle: 0
+    };
+  }
+  
+  return bestRect;
+}
+
+// YOLOv8 Resistor Detection Pipeline
+async function detectResistorsYOLO(inputCanvas, isStatic = false) {
+  if (!yoloSession) return [];
+  
+  const width = inputCanvas.width;
+  const height = inputCanvas.height;
+  
+  if (isStatic) logDebug('--- AI 분석 파이프라인 가동 ---', 'info');
+  
+  // 1. Preprocess: resize to 512x512 and format CHW tensor
+  if (isStatic) logDebug('AI 입력 텐서 전처리 중...', 'info');
+  const inputTensor = preprocessYolo(inputCanvas, 512);
+  
+  // 2. Inference
+  if (isStatic) logDebug('YOLOv8 AI 로컬 추론 실행 중 (WASM)...', 'info');
+  const startTime = performance.now();
+  const results = await yoloSession.run({ images: inputTensor });
+  const inferenceTime = performance.now() - startTime;
+  if (isStatic) logDebug(`추론 완료: 소요시간 ${inferenceTime.toFixed(1)}ms`, 'success');
+  
+  // Get output name (default is output0)
+  const outputName = yoloSession.outputNames[0];
+  const outputTensor = results[outputName];
+  
+  // 3. Postprocess (conf threshold = 0.35, iou = 0.45)
+  const confThreshold = 0.35;
+  const iouThreshold = 0.45;
+  const detections = postprocessYolo(outputTensor, width, height, 512, confThreshold, iouThreshold);
+  
+  if (isStatic) logDebug(`AI 검출 후보군: ${detections.length}개`, 'info');
+  
+  // 4. For each bbox, crop and find exact rotated rect and extract color bands
+  const finalDetections = [];
+  let src = cv.imread(inputCanvas);
+  
+  // Apply tuning filters (same as existing pipeline) to match the color extraction conditions
+  let tuned = new cv.Mat();
+  applyTuningFilters(src, tuned);
+  
+  for (let i = 0; i < detections.length; i++) {
+    const det = detections[i];
+    const id = i + 1;
+    
+    // Find rotated rect of the resistor body inside the axis-aligned bounding box
+    const rotatedRect = refineRotatedRect(src, det.box, id, isStatic);
+    
+    // Valid Resistor Candidate! Extract color bands.
+    let bands = extractBandsFromResistor(tuned, rotatedRect, isStatic, id);
+    if (bands && bands.length >= 3) {
+      // Normalize rect angle to be in [-45, 45] range
+      let normalizedAngle = rotatedRect.angle;
+      let w = rotatedRect.size.width;
+      let h = rotatedRect.size.height;
+      if (w < h) {
+        normalizedAngle += 90;
+        w = rotatedRect.size.height;
+        h = rotatedRect.size.width;
+      }
+      
+      finalDetections.push({
+        rect: {
+          center: { x: rotatedRect.center.x, y: rotatedRect.center.y },
+          size: { width: w, height: h },
+          angle: normalizedAngle
+        },
+        bands: bands
+      });
+    } else {
+      if (isStatic) logDebug(`[저항 #${id}] ➔ 탈락: 유효한 색띠 추출 실패 (3개 미만 감지)`, 'warn');
+    }
+  }
+  
+  tuned.delete();
+  src.delete();
+  
+  return finalDetections;
+}
+
+// ---------------- SCANNING LOGIC (AI & OPENCV.JS) ----------------
+async function processVideoFrameAsync(timestamp) {
   if (!isCameraRunning) return;
 
   if (timestamp - lastProcessingTime >= PROCESSING_INTERVAL) {
@@ -443,26 +803,36 @@ function processVideoFrame(timestamp) {
       // Draw video to canvas first
       ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
       
-      // Read pixels into OpenCV Mat
-      let src = cv.imread(canvas);
-      let detections = detectResistorsCV(src);
+      let detections = [];
+      if (detectionMode === 'yolo') {
+        if (isYoloModelReady) {
+          detections = await detectResistorsYOLO(canvas);
+        } else {
+          // Fallback to OpenCV if YOLO not ready yet
+          let src = cv.imread(canvas);
+          detections = detectResistorsCV(src);
+          src.delete();
+        }
+      } else {
+        let src = cv.imread(canvas);
+        detections = detectResistorsCV(src);
+        src.delete();
+      }
       
       // Track detections
       trackResistors(detections);
       
       // Draw results (glowing bounds and labels)
       drawDetectionsUI();
-      
-      src.delete();
     } catch (err) {
-      console.error('OpenCV frame processing error:', err);
+      console.error('Frame processing error:', err);
     }
   }
 
-  requestAnimationId = requestAnimationFrame(processVideoFrame);
+  requestAnimationId = requestAnimationFrame(processVideoFrameAsync);
 }
 
-function processStaticImage(image) {
+async function processStaticImage(image) {
   if (!isOpenCvReady) {
     logDebug('OpenCV.js가 로드되지 않았습니다. 잠시만 대기해 주세요.', 'warn');
     return;
@@ -477,12 +847,23 @@ function processStaticImage(image) {
   
   try {
     let src = cv.imread(canvas);
-    logDebug('OpenCV.js 이미지 분석을 시작합니다...', 'info');
+    logDebug(`${detectionMode === 'yolo' ? 'YOLOv8 AI' : 'OpenCV.js'} 이미지 분석을 시작합니다...`, 'info');
     
     // Clear old list on a new file upload
     trackedResistors = [];
     
-    let detections = detectResistorsCV(src);
+    let detections = [];
+    if (detectionMode === 'yolo') {
+      if (isYoloModelReady) {
+        detections = await detectResistorsYOLO(canvas, true);
+      } else {
+        logDebug('YOLOv8 AI 모델이 아직 준비되지 않아 OpenCV 스캔으로 대체합니다.', 'warn');
+        detections = detectResistorsCV(src);
+      }
+    } else {
+      detections = detectResistorsCV(src);
+    }
+    
     logDebug(`분석 완료: 총 ${detections.length}개의 저항이 감지되었습니다.`, detections.length > 0 ? 'success' : 'warn');
     
     trackResistors(detections);
