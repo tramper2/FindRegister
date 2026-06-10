@@ -890,144 +890,102 @@ async function processStaticImage(image) {
 }
 
 /**
- * OPENCV.JS PIPELINE: Detects all resistors in a Mat.
+ * ResCan-style Adaptive CV PIPELINE: Detects all resistors in a Mat.
+ * Uses background subtraction instead of fixed HSV segmentation.
+ * Inspired by https://github.com/skyinfinity/ResCan
  * Returns array of { rect, bands: [] }
  */
 function detectResistorsCV(src) {
   let detections = [];
   const isStatic = !isLiveCameraActive;
-  
-  if (isStatic) logDebug('--- CV 분석 파이프라인 가동 ---', 'info');
-  
+
+  if (isStatic) logDebug('--- ResCan CV 분석 파이프라인 가동 ---', 'info');
+
   // 1. Apply brightness/contrast/saturation tuning
   let tuned = new cv.Mat();
   applyTuningFilters(src, tuned);
-  
-  // 2. Reduce noise (Gaussian Blur)
-  let blurred = new cv.Mat();
-  cv.GaussianBlur(tuned, blurred, new cv.Size(5, 5), 0, 0, cv.BORDER_DEFAULT);
-  
-  // 3. Convert to HSV
+
+  // 2. Convert to RGB
   let rgb = new cv.Mat();
-  cv.cvtColor(blurred, rgb, cv.COLOR_RGBA2RGB);
-  let hsv = new cv.Mat();
-  cv.cvtColor(rgb, hsv, cv.COLOR_RGB2HSV);
-  
-  // 4. Threshold base colors of resistor body (Tan / Blue)
-  let mask = new cv.Mat();
-  const mode = elColorSpace.value;
-  if (isStatic) logDebug(`몸체 색상 세그멘테이션 (모드: ${mode === 'both' ? '모두' : mode === 'tan' ? '황토색' : '파란색'})`, 'info');
-  
-  if (mode === 'tan' || mode === 'both') {
-    // Filter out low-saturation warm cream backgrounds (raising Saturation lower bound to 35)
-    let lowTan = new cv.Mat(hsv.rows, hsv.cols, hsv.type(), [0, 35, 45, 0]);
-    let highTan = new cv.Mat(hsv.rows, hsv.cols, hsv.type(), [38, 255, 255, 0]);
-    let maskTan = new cv.Mat();
-    cv.inRange(hsv, lowTan, highTan, maskTan);
-    
-    if (mask.empty()) {
-      maskTan.copyTo(mask);
-    } else {
-      cv.bitwise_or(mask, maskTan, mask);
-    }
-    
-    lowTan.delete();
-    highTan.delete();
-    maskTan.delete();
-  }
-  
-  if (mode === 'blue' || mode === 'both') {
-    // Filter out low-saturation backgrounds for blue/green body (raising Saturation lower bound to 25)
-    let lowBlue = new cv.Mat(hsv.rows, hsv.cols, hsv.type(), [35, 25, 45, 0]);
-    let highBlue = new cv.Mat(hsv.rows, hsv.cols, hsv.type(), [140, 255, 255, 0]);
-    let maskBlue = new cv.Mat();
-    cv.inRange(hsv, lowBlue, highBlue, maskBlue);
-    
-    if (mask.empty()) {
-      maskBlue.copyTo(mask);
-    } else {
-      cv.bitwise_or(mask, maskBlue, mask);
-    }
-    
-    lowBlue.delete();
-    highBlue.delete();
-    maskBlue.delete();
-  }
-  
-  // 5. Morphological Closing to fill gaps caused by color bands
+  cv.cvtColor(tuned, rgb, cv.COLOR_RGBA2RGB);
+
+  // 3. Compute mean color of the image (background reference)
+  let meanScalar = cv.mean(rgb);
+  let meanR = meanScalar[0], meanG = meanScalar[1], meanB = meanScalar[2];
+
+  if (isStatic) logDebug(`배경 평균색: RGB(${meanR.toFixed(0)}, ${meanG.toFixed(0)}, ${meanB.toFixed(0)})`, 'info');
+
+  // 4. Create dark pixel mask (ResCan approach)
+  // A pixel is "dark" if ANY channel is below 50% of the mean → potential resistor region
+  let channels = new cv.MatVector();
+  cv.split(rgb, channels);
+
+  let maskR = new cv.Mat();
+  let maskG = new cv.Mat();
+  let maskB = new cv.Mat();
+
+  let threshR = Math.max(30, meanR * 0.5);
+  let threshG = Math.max(30, meanG * 0.5);
+  let threshB = Math.max(30, meanB * 0.5);
+
+  // THRESH_BINARY_INV: pixels BELOW threshold → 255 (dark)
+  cv.threshold(channels.get(0), maskR, threshR, 255, cv.THRESH_BINARY_INV);
+  cv.threshold(channels.get(1), maskG, threshG, 255, cv.THRESH_BINARY_INV);
+  cv.threshold(channels.get(2), maskB, threshB, 255, cv.THRESH_BINARY_INV);
+
+  // Combine: dark if ANY channel is dark (bitwise OR)
+  let darkMask = new cv.Mat();
+  cv.bitwise_or(maskR, maskG, darkMask);
+  cv.bitwise_or(darkMask, maskB, darkMask);
+
+  maskR.delete(); maskG.delete(); maskB.delete();
+  channels.delete();
+
+  // 5. Morphological closing with horizontal kernel to bridge color band gaps
   let closed = new cv.Mat();
-  // Scale closing kernel size dynamically based on image resolution (approx 1.5% of width, odd number)
-  let kSizeVal = Math.max(5, Math.round(src.cols * 0.015));
-  if (kSizeVal % 2 === 0) kSizeVal += 1;
-  if (isStatic) logDebug(`동적 모폴로지 커널 크기 설정: ${kSizeVal}x${kSizeVal}`, 'info');
-  let ksize = new cv.Size(kSizeVal, kSizeVal);
-  let M = cv.getStructuringElement(cv.MORPH_RECT, ksize);
-  cv.morphologyEx(mask, closed, cv.MORPH_CLOSE, M);
-  M.delete();
-  
-  // 6. Find Contours
+  let kSize = Math.max(11, Math.round(src.cols * 0.025));
+  if (kSize % 2 === 0) kSize += 1;
+  let ksize = new cv.Size(kSize, 3);
+  let kernel = cv.getStructuringElement(cv.MORPH_RECT, ksize);
+  cv.morphologyEx(darkMask, closed, cv.MORPH_CLOSE, kernel);
+  kernel.delete();
+
+  if (isStatic) logDebug(`다크 마스크 모폴로지 커널: ${kSize}x3 (수평 닫기)`, 'info');
+
+  // 6. Find contours
   let contours = new cv.MatVector();
   let hierarchy = new cv.Mat();
   cv.findContours(closed, contours, hierarchy, cv.RETR_EXTERNAL, cv.CHAIN_APPROX_SIMPLE);
-  
-  // Minimum aspect ratio and size thresholds
-  // Scale dynamically with a cap to support high-res uploads
-  const minArea = Math.min(600, canvas.width * canvas.height * 0.0005);
-  if (isStatic) logDebug(`검출된 윤곽선 후보군: ${contours.size()}개 | 필터 최소면적 기준: ${Math.round(minArea)}px`, 'info');
-  
+
+  const minArea = Math.min(400, src.cols * src.rows * 0.0003);
+
+  if (isStatic) logDebug(`다크마스크 윤곽선 후보군: ${contours.size()}개 | 최소면적: ${Math.round(minArea)}px`, 'info');
+
   for (let i = 0; i < contours.size(); i++) {
     let contour = contours.get(i);
     let area = cv.contourArea(contour);
-    
+
     if (area < minArea) {
       if (isStatic) logDebug(`[후보 #${i+1}] ➔ 탈락: 면적 미달 (${Math.round(area)}px < ${Math.round(minArea)}px)`, 'warn');
       contour.delete();
       continue;
     }
-    
+
     // Find rotated rect
     let rect = cv.minAreaRect(contour);
     let width = rect.size.width;
     let height = rect.size.height;
-    
-    // Aspect ratio filter (resistors are long cylinders)
+
+    // Aspect ratio filter (relaxed range: resistors are long cylinders)
     let aspect = Math.max(width, height) / Math.min(width, height);
-    if (aspect < 2.0 || aspect > 6.5) {
-      if (isStatic) logDebug(`[후보 #${i+1}] 면적: ${Math.round(area)}px | ➔ 탈락: 가로세로 비율 불충족 (${aspect.toFixed(2)}배, 기준: 2.0~6.5)`, 'warn');
+    if (aspect < 1.5 || aspect > 8.0) {
+      if (isStatic) logDebug(`[후보 #${i+1}] 면적: ${Math.round(area)}px | ➔ 탈락: 가로세로 비율 불충족 (${aspect.toFixed(2)}배, 기준: 1.5~8.0)`, 'warn');
       contour.delete();
       continue;
     }
-    
-    // Filter out digital neon UI elements/badges (which have extremely high saturation and flat brightness)
-    let cMask = cv.Mat.zeros(hsv.rows, hsv.cols, cv.CV_8UC1);
-    cv.drawContours(cMask, contours, i, new cv.Scalar(255), -1);
-    let meanHSV = cv.mean(hsv, cMask);
-    cMask.delete();
-    
-    let meanSat = meanHSV[1];
-    let meanVal = meanHSV[2];
-    
-    if (meanSat > 180 && meanVal > 245) {
-      if (isStatic) logDebug(`[후보 #${i+1}] 면적: ${Math.round(area)}px | ➔ 탈락: 디지털 UI 요소로 감지됨 (채도: ${meanSat.toFixed(1)}, 명도: ${meanVal.toFixed(1)})`, 'warn');
-      contour.delete();
-      continue;
-    }
-    
-    // Solidity filter (should be moderately solid rectangular/oblong shape)
-    let hull = new cv.Mat();
-    cv.convexHull(contour, hull, false);
-    let hullArea = cv.contourArea(hull);
-    let solidity = area / hullArea;
-    hull.delete();
-    
-    if (solidity < 0.60) {
-      if (isStatic) logDebug(`[후보 #${i+1}] 면적: ${Math.round(area)}px | 비율: ${aspect.toFixed(2)} | ➔ 탈락: 볼록성 불충족 (${solidity.toFixed(2)}, 기준: >= 0.60)`, 'warn');
-      contour.delete();
-      continue;
-    }
-    
-    if (isStatic) logDebug(`[후보 #${i+1}] 면적: ${Math.round(area)}px | 비율: ${aspect.toFixed(2)} | 볼록성: ${solidity.toFixed(2)} ➔ 통과! (색띠 스캔 시작)`, 'success');
-    
+
+    if (isStatic) logDebug(`[후보 #${i+1}] 면적: ${Math.round(area)}px | 비율: ${aspect.toFixed(2)} ➔ 통과! (색띠 스캔 시작)`, 'success');
+
     // Valid Resistor Candidate! Extract color bands.
     let bands = extractBandsFromResistor(tuned, rect, isStatic, i+1);
     if (bands && bands.length >= 3) {
@@ -1040,7 +998,7 @@ function detectResistorsCV(src) {
         w = rect.size.height;
         h = rect.size.width;
       }
-      
+
       detections.push({
         rect: {
           center: { x: rect.center.x, y: rect.center.y },
@@ -1052,20 +1010,18 @@ function detectResistorsCV(src) {
     } else {
       if (isStatic) logDebug(`[후보 #${i+1}] ➔ 탈락: 유효한 색띠 추출 실패 (3개 미만 감지)`, 'warn');
     }
-    
+
     contour.delete();
   }
-  
+
   // Cleanup mats
   tuned.delete();
-  blurred.delete();
   rgb.delete();
-  hsv.delete();
-  mask.delete();
+  darkMask.delete();
   closed.delete();
   contours.delete();
   hierarchy.delete();
-  
+
   return detections;
 }
 
@@ -1197,42 +1153,56 @@ function extractBandsFromResistor(src, rect, isStatic = false, id = 0) {
     });
   }
   
-  // Determine dominant base color of the body (tan/beige vs blue/green)
-  // We can sample the outer edges of the resistor (which are usually base body color)
+  // Determine dominant base color of the body (ResCan approach: use right edge as background)
+  // The right edge is more consistent (typically body color before the tolerance band)
   let edgeSampleCount = Math.min(10, Math.floor(smoothed.length * 0.1));
   let baseR = 0, baseG = 0, baseB = 0;
+  // Sample the rightmost edge (ResCan uses the rightmost 50 columns)
   for (let i = 0; i < edgeSampleCount; i++) {
-    // left edge
-    baseR += smoothed[i].r;
-    baseG += smoothed[i].g;
-    baseB += smoothed[i].b;
-    // right edge
     baseR += smoothed[smoothed.length - 1 - i].r;
     baseG += smoothed[smoothed.length - 1 - i].g;
     baseB += smoothed[smoothed.length - 1 - i].b;
   }
-  baseR = Math.round(baseR / (edgeSampleCount * 2));
-  baseG = Math.round(baseG / (edgeSampleCount * 2));
-  baseB = Math.round(baseB / (edgeSampleCount * 2));
-  
+  baseR = Math.round(baseR / edgeSampleCount);
+  baseG = Math.round(baseG / edgeSampleCount);
+  baseB = Math.round(baseB / edgeSampleCount);
+
   if (isStatic) {
-    logDebug(`[저항 #${id}] 몸체 기본 색상 샘플링 완료 - RGB: (${baseR}, ${baseG}, ${baseB})`, 'info');
+    logDebug(`[저항 #${id}] 몸체 기본 색상 샘플링 (우측 에지) - RGB: (${baseR}, ${baseG}, ${baseB})`, 'info');
   }
 
-  // Scan columns and find bands: columns whose color is significantly different from the base body color
+  // Scan columns and find bands using adaptive threshold (ResCan approach)
+  // First compute all distances, then use average distance as threshold
   let bandSegments = [];
   let currentSegment = null;
-  
+
   // Skip the extreme left and right margins to avoid lead wires and shadows
   const margin = Math.max(5, Math.round(smoothed.length * 0.1));
-  
+
+  // Compute distance from base color for each column
+  let distances = [];
   for (let i = margin; i < smoothed.length - margin; i++) {
     const col = smoothed[i];
-    // Calculate Euclidean color distance from base color
-    let dist = Math.sqrt(Math.pow(col.r - baseR, 2) + Math.pow(col.g - baseG, 2) + Math.pow(col.b - baseB, 2));
-    
-    // Distance threshold: if color deviates enough, it's a band
-    if (dist > 30) {
+    let dist = Math.pow(col.r - baseR, 2) + Math.pow(col.g - baseG, 2) + Math.pow(col.b - baseB, 2);
+    distances.push({ idx: i, dist: dist });
+  }
+
+  // Calculate average distance (ResCan: bgdists[x] > avgdist * 1.0)
+  let avgDist = 0;
+  if (distances.length > 0) {
+    avgDist = distances.reduce((sum, d) => sum + d.dist, 0) / distances.length;
+  }
+
+  if (isStatic) {
+    logDebug(`[저항 #${id}] 색상 거리 통계 - 평균: ${avgDist.toFixed(0)}, 최대: ${Math.max(...distances.map(d => d.dist)).toFixed(0)}`, 'info');
+  }
+
+  // Use average distance as adaptive threshold (like ResCan)
+  for (let j = 0; j < distances.length; j++) {
+    const { idx: i, dist } = distances[j];
+    const col = smoothed[i];
+
+    if (dist > avgDist) {
       if (!currentSegment) {
         currentSegment = { start: i, sumR: 0, sumG: 0, sumB: 0, sumH: 0, sumS: 0, sumV: 0, count: 0 };
       }
@@ -1255,13 +1225,13 @@ function extractBandsFromResistor(src, rect, isStatic = false, id = 0) {
     currentSegment.end = smoothed.length - 1 - margin;
     bandSegments.push(currentSegment);
   }
-  
+
   if (isStatic) {
-    logDebug(`[저항 #${id}] 몸체 색상 편차 검출 완료 - 원시 색띠 구간 개수: ${bandSegments.length}개`, 'info');
+    logDebug(`[저항 #${id}] 색상 편차 검출 완료 - 원시 색띠 구간 개수: ${bandSegments.length}개 (적응형 임계값: ${avgDist.toFixed(0)})`, 'info');
   }
 
   // Post-process segments: calculate average colors, filter by width
-  const minBandWidth = Math.max(2, Math.round(smoothed.length * 0.015)); // at least 1.5% width
+  const minBandWidth = Math.max(3, Math.round(smoothed.length * 0.02)); // at least 2% width (ResCan: 20 continuous)
   const maxBandWidth = Math.round(smoothed.length * 0.22); // max 22% width
   
   let validBands = [];
@@ -1305,91 +1275,71 @@ function extractBandsFromResistor(src, rect, isStatic = false, id = 0) {
 
 /**
  * Classify RGB + HSV coordinates into 12 standard resistor colors
+ * Uses RGB distance as primary (ResCan approach), HSV rules as refinement
  */
 function classifyColor(r, g, b, h, s, v) {
+  // Primary: RGB distance-based classification (ResCan approach)
+  let rgbResult = getClosestColorRGB(r, g, b);
+
+  // HSV-based refinement for ambiguous cases
   // Hue is 0-360, Saturation: 0-100, Value: 0-100
 
-  // 1. Black: very dark colors
+  // Black: very dark colors (confident HSV rule)
   if (v < 22) return 'black';
 
-  // 2. White: very bright, very low saturation
+  // White: very bright, very low saturation (confident HSV rule)
   if (v > 75 && s < 15) return 'white';
 
-  // 3. Grey: low saturation, medium brightness
-  if (s < 18) {
-    if (v > 20 && v <= 75) return 'grey';
-  }
-
-  // 4. Gold: shiny yellow/orange (Hue: 25-45, Saturation: 35-75, Value: 35-85)
+  // Gold: distinctive yellow/orange with metallic sheen
   if (h >= 25 && h <= 49 && s >= 35 && s <= 80 && v >= 30 && v <= 85) {
     return 'gold';
   }
 
-  // 5. Brown: dark reddish-orange (H: 5-25, S: 25-80, V: 15-50)
-  if (h >= 5 && h <= 28 && s >= 20 && v >= 10 && v <= 55) {
-    return 'brown';
-  }
-
-  // 6. Red
-  if ((h >= 0 && h <= 12) || (h >= 345 && h <= 360)) {
-    if (s > 35) return 'red';
-    return 'brown'; // Low saturation red is brown
-  }
-
-  // 7. Orange
-  if (h > 12 && h <= 28) {
-    if (v < 40) return 'brown';
-    return 'orange';
-  }
-
-  // 8. Yellow
-  if (h > 28 && h <= 49) {
-    return 'yellow';
-  }
-
-  // 9. Green
-  if (h > 49 && h <= 88) {
-    return 'green';
-  }
-
-  // 10. Blue
-  if (h > 88 && h <= 145) {
-    return 'blue';
-  }
-
-  // 11. Violet/Purple
-  if (h > 145 && h <= 175) {
-    return 'violet';
-  }
-  
-  // 12. Silver: light grey/white, metallic sheen
+  // Silver: light grey/white, metallic sheen
   if (s < 25 && v > 50 && v < 85) {
     return 'silver';
   }
 
-  // RGB Euclidean fallback
-  return getClosestColorRGB(r, g, b);
+  // For the remaining colors, trust RGB distance result
+  // but cross-check with HSV for common misclassifications
+
+  // Brown vs Red disambiguation
+  if (rgbResult === 'brown' && h >= 0 && h <= 12 && s > 50 && v > 35) return 'red';
+  if (rgbResult === 'red' && v < 30) return 'brown';
+
+  // Orange vs Brown disambiguation
+  if (rgbResult === 'orange' && v < 35) return 'brown';
+  if (rgbResult === 'brown' && h > 12 && h <= 28 && v >= 40) return 'orange';
+
+  // Yellow vs Gold disambiguation
+  if (rgbResult === 'yellow' && s < 50) return 'gold';
+
+  // Grey disambiguation
+  if (s < 18 && v > 20 && v <= 75) return 'grey';
+
+  return rgbResult;
 }
 
 function getClosestColorRGB(r, g, b) {
   let minDistance = Infinity;
   let closestColor = 'black';
-  
+
+  // Reference RGB values: average of ResCan measured values and ideal values
   const referenceRGBs = {
-    black: [0, 0, 0],
-    brown: [110, 60, 20],
-    red: [220, 20, 20],
-    orange: [255, 100, 0],
-    yellow: [230, 200, 30],
-    green: [20, 150, 40],
-    blue: [20, 60, 200],
-    violet: [150, 50, 150],
-    grey: [110, 110, 110],
-    white: [240, 240, 240],
-    gold: [190, 140, 40],
+    black:  [10, 10, 10],
+    brown:  [90, 57, 29],
+    red:    [163, 26, 30],
+    orange: [208, 95, 25],
+    yellow: [194, 162, 35],
+    green:  [31, 110, 43],
+    blue:   [30, 67, 143],
+    violet: [113, 53, 113],
+    grey:   [92, 88, 86],
+    white:  [220, 220, 220],
+    gold:   [190, 140, 40],
     silver: [170, 170, 170]
   };
-  
+
   for (let color in referenceRGBs) {
     let ref = referenceRGBs[color];
     let dist = Math.pow(r - ref[0], 2) + Math.pow(g - ref[1], 2) + Math.pow(b - ref[2], 2);
@@ -1398,7 +1348,7 @@ function getClosestColorRGB(r, g, b) {
       closestColor = color;
     }
   }
-  
+
   return closestColor;
 }
 
