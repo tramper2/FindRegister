@@ -525,8 +525,8 @@ function detectResistorsCV(src) {
   if (isStatic) logDebug(`몸체 색상 세그멘테이션 (모드: ${mode === 'both' ? '모두' : mode === 'tan' ? '황토색' : '파란색'})`, 'info');
   
   if (mode === 'tan' || mode === 'both') {
-    // Widen range to cover orange, brown, red, yellow, gold bands on tan/pink body
-    let lowTan = new cv.Mat(hsv.rows, hsv.cols, hsv.type(), [0, 8, 40, 0]);
+    // Filter out low-saturation warm cream backgrounds (raising Saturation lower bound to 28)
+    let lowTan = new cv.Mat(hsv.rows, hsv.cols, hsv.type(), [0, 28, 45, 0]);
     let highTan = new cv.Mat(hsv.rows, hsv.cols, hsv.type(), [38, 255, 255, 0]);
     let maskTan = new cv.Mat();
     cv.inRange(hsv, lowTan, highTan, maskTan);
@@ -543,8 +543,8 @@ function detectResistorsCV(src) {
   }
   
   if (mode === 'blue' || mode === 'both') {
-    // Widen range for blue/green body
-    let lowBlue = new cv.Mat(hsv.rows, hsv.cols, hsv.type(), [35, 15, 35, 0]);
+    // Filter out low-saturation backgrounds for blue/green body (raising Saturation lower bound to 25)
+    let lowBlue = new cv.Mat(hsv.rows, hsv.cols, hsv.type(), [35, 25, 45, 0]);
     let highBlue = new cv.Mat(hsv.rows, hsv.cols, hsv.type(), [140, 255, 255, 0]);
     let maskBlue = new cv.Mat();
     cv.inRange(hsv, lowBlue, highBlue, maskBlue);
@@ -562,8 +562,11 @@ function detectResistorsCV(src) {
   
   // 5. Morphological Closing to fill gaps caused by color bands
   let closed = new cv.Mat();
-  // Use a larger kernel (21x21) to merge gaps in high-res images
-  let ksize = new cv.Size(21, 21);
+  // Scale closing kernel size dynamically based on image resolution (approx 1.5% of width, odd number)
+  let kSizeVal = Math.max(5, Math.round(src.cols * 0.015));
+  if (kSizeVal % 2 === 0) kSizeVal += 1;
+  if (isStatic) logDebug(`동적 모폴로지 커널 크기 설정: ${kSizeVal}x${kSizeVal}`, 'info');
+  let ksize = new cv.Size(kSizeVal, kSizeVal);
   let M = cv.getStructuringElement(cv.MORPH_RECT, ksize);
   cv.morphologyEx(mask, closed, cv.MORPH_CLOSE, M);
   M.delete();
