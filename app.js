@@ -62,6 +62,8 @@ const elBandsExpList = document.getElementById('bands-exp-list');
 const elSuggestionsBox = document.getElementById('generator-suggestions-box');
 const elSuggestionChips = document.getElementById('suggestion-chips');
 const elReferenceTableBody = document.getElementById('reference-table-body');
+const elDebugLogs = document.getElementById('debug-logs');
+const elClearLogs = document.getElementById('btn-clear-logs');
 
 // State Variables
 let isOpenCvReady = false;
@@ -85,6 +87,25 @@ let staticImage = null; // Hold uploaded static image
 // Colors Reference for HTML list
 const COLORS_LIST = Object.keys(COLOR_CODES);
 
+// Debug Log Helper
+function logDebug(message, type = 'info') {
+  if (!elDebugLogs) return;
+  const item = document.createElement('div');
+  item.className = `log-item log-${type}`;
+  
+  const now = new Date();
+  const timeStr = `${now.getHours().toString().padStart(2, '0')}:${now.getMinutes().toString().padStart(2, '0')}:${now.getSeconds().toString().padStart(2, '0')}.${(now.getMilliseconds()).toString().padStart(3, '0')}`;
+  
+  item.textContent = `[${timeStr}] ${message}`;
+  elDebugLogs.appendChild(item);
+  elDebugLogs.scrollTop = elDebugLogs.scrollHeight;
+  
+  // Keep last 100 entries to prevent memory leak
+  while (elDebugLogs.childNodes.length > 100) {
+    elDebugLogs.removeChild(elDebugLogs.firstChild);
+  }
+}
+
 // Initialize App
 function init() {
   bindTabs();
@@ -94,6 +115,12 @@ function init() {
   bindGenerator();
   populateReferenceTable();
 
+  // Clear logs button event
+  elClearLogs.addEventListener('click', () => {
+    elDebugLogs.innerHTML = '';
+    logDebug('디버그 로그가 초기화되었습니다.', 'info');
+  });
+
   // Handle OpenCV ready state
   function handleOpenCvReady() {
     if (isOpenCvReady) return; // avoid duplicate calls
@@ -101,6 +128,7 @@ function init() {
     elOpencvBanner.className = 'status-banner ready';
     elOpencvStatusText.textContent = 'OpenCV.js 이미지 프로세싱 엔진이 준비되었습니다.';
     elBtnToggleCamera.disabled = false;
+    logDebug('OpenCV.js WebAssembly 이미지 프로세싱 엔진 컴파일 및 로드 완료!', 'success');
     
     // Automatically hide banner after 3 seconds
     setTimeout(() => {
@@ -112,6 +140,7 @@ function init() {
   if (window.cvReady || (typeof cv !== 'undefined' && cv.Mat)) {
     handleOpenCvReady();
   } else {
+    logDebug('OpenCV.js 이미지 엔진 로딩을 대기 중...', 'info');
     document.addEventListener('opencvReady', handleOpenCvReady);
   }
 
@@ -434,8 +463,12 @@ function processVideoFrame(timestamp) {
 }
 
 function processStaticImage(image) {
-  if (!isOpenCvReady) return;
+  if (!isOpenCvReady) {
+    logDebug('OpenCV.js가 로드되지 않았습니다. 잠시만 대기해 주세요.', 'warn');
+    return;
+  }
   
+  logDebug(`정적 이미지 업로드됨: ${image.naturalWidth || image.width}x${image.naturalHeight || image.height}px`, 'info');
   canvas.width = image.naturalWidth || image.width;
   canvas.height = image.naturalHeight || image.height;
   
@@ -444,16 +477,20 @@ function processStaticImage(image) {
   
   try {
     let src = cv.imread(canvas);
+    logDebug('OpenCV.js 이미지 분석을 시작합니다...', 'info');
     
     // Clear old list on a new file upload
     trackedResistors = [];
     
     let detections = detectResistorsCV(src);
+    logDebug(`분석 완료: 총 ${detections.length}개의 저항이 감지되었습니다.`, detections.length > 0 ? 'success' : 'warn');
+    
     trackResistors(detections);
     drawDetectionsUI();
     
     src.delete();
   } catch (err) {
+    logDebug(`이미지 분석 중 치명적 에러 발생: ${err.message || err}`, 'error');
     console.error('Static image process failed:', err);
   }
 }
@@ -464,6 +501,9 @@ function processStaticImage(image) {
  */
 function detectResistorsCV(src) {
   let detections = [];
+  const isStatic = !isLiveCameraActive;
+  
+  if (isStatic) logDebug('--- CV 분석 파이프라인 가동 ---', 'info');
   
   // 1. Apply brightness/contrast/saturation tuning
   let tuned = new cv.Mat();
@@ -482,6 +522,7 @@ function detectResistorsCV(src) {
   // 4. Threshold base colors of resistor body (Tan / Blue)
   let mask = new cv.Mat();
   const mode = elColorSpace.value;
+  if (isStatic) logDebug(`몸체 색상 세그멘테이션 (모드: ${mode === 'both' ? '모두' : mode === 'tan' ? '황토색' : '파란색'})`, 'info');
   
   if (mode === 'tan' || mode === 'both') {
     // Widen range to cover orange, brown, red, yellow, gold bands on tan/pink body
@@ -531,12 +572,14 @@ function detectResistorsCV(src) {
   // Minimum aspect ratio and size thresholds
   // Scale dynamically with a cap to support high-res uploads
   const minArea = Math.min(600, canvas.width * canvas.height * 0.0005);
+  if (isStatic) logDebug(`검출된 윤곽선 후보군: ${contours.size()}개 | 필터 최소면적 기준: ${Math.round(minArea)}px`, 'info');
   
   for (let i = 0; i < contours.size(); i++) {
     let contour = contours.get(i);
     let area = cv.contourArea(contour);
     
     if (area < minArea) {
+      if (isStatic) logDebug(`[후보 #${i+1}] ➔ 탈락: 면적 미달 (${Math.round(area)}px < ${Math.round(minArea)}px)`, 'warn');
       contour.delete();
       continue;
     }
@@ -549,6 +592,7 @@ function detectResistorsCV(src) {
     // Aspect ratio filter (resistors are long cylinders)
     let aspect = Math.max(width, height) / Math.min(width, height);
     if (aspect < 2.0 || aspect > 6.5) {
+      if (isStatic) logDebug(`[후보 #${i+1}] 면적: ${Math.round(area)}px | ➔ 탈락: 가로세로 비율 불충족 (${aspect.toFixed(2)}배, 기준: 2.0~6.5)`, 'warn');
       contour.delete();
       continue;
     }
@@ -561,12 +605,15 @@ function detectResistorsCV(src) {
     hull.delete();
     
     if (solidity < 0.60) {
+      if (isStatic) logDebug(`[후보 #${i+1}] 면적: ${Math.round(area)}px | 비율: ${aspect.toFixed(2)} | ➔ 탈락: 볼록성 불충족 (${solidity.toFixed(2)}, 기준: >= 0.60)`, 'warn');
       contour.delete();
       continue;
     }
     
+    if (isStatic) logDebug(`[후보 #${i+1}] 면적: ${Math.round(area)}px | 비율: ${aspect.toFixed(2)} | 볼록성: ${solidity.toFixed(2)} ➔ 통과! (색띠 스캔 시작)`, 'success');
+    
     // Valid Resistor Candidate! Extract color bands.
-    let bands = extractBandsFromResistor(tuned, rect);
+    let bands = extractBandsFromResistor(tuned, rect, isStatic, i+1);
     if (bands && bands.length >= 3) {
       // Normalize rect angle to be in [-45, 45] range
       let normalizedAngle = rect.angle;
@@ -586,6 +633,8 @@ function detectResistorsCV(src) {
         },
         bands: bands
       });
+    } else {
+      if (isStatic) logDebug(`[후보 #${i+1}] ➔ 탈락: 유효한 색띠 추출 실패 (3개 미만 감지)`, 'warn');
     }
     
     contour.delete();
@@ -607,7 +656,7 @@ function detectResistorsCV(src) {
 /**
  * Extract color bands by rotating, cropping, and profiling the resistor body.
  */
-function extractBandsFromResistor(src, rect) {
+function extractBandsFromResistor(src, rect, isStatic = false, id = 0) {
   let angle = rect.angle;
   let w = rect.size.width;
   let h = rect.size.height;
@@ -633,10 +682,13 @@ function extractBandsFromResistor(src, rect) {
   let cropH = Math.min(warped.rows - y, Math.round(h));
   
   if (cropW < 20 || cropH < 6) {
+    if (isStatic) logDebug(`[저항 #${id}] 탈락: 크롭 영역 크기가 너무 작음 (${cropW}x${cropH}px)`, 'warn');
     warped.delete();
     return null;
   }
   
+  if (isStatic) logDebug(`[저항 #${id}] 크롭 영역 설정: x=${x}, y=${y}, 크기=${cropW}x${cropH}px`, 'info');
+
   let rectRoi = new cv.Rect(x, y, cropW, cropH);
   let crop = warped.roi(rectRoi);
   warped.delete();
@@ -649,6 +701,7 @@ function extractBandsFromResistor(src, rect) {
   const sliceHeight = endY - startY;
   
   if (sliceHeight <= 0) {
+    if (isStatic) logDebug(`[저항 #${id}] 탈락: 슬라이스 높이 유효하지 않음 (${sliceHeight})`, 'warn');
     crop.delete();
     return null;
   }
@@ -746,6 +799,10 @@ function extractBandsFromResistor(src, rect) {
   baseG = Math.round(baseG / (edgeSampleCount * 2));
   baseB = Math.round(baseB / (edgeSampleCount * 2));
   
+  if (isStatic) {
+    logDebug(`[저항 #${id}] 몸체 기본 색상 샘플링 완료 - RGB: (${baseR}, ${baseG}, ${baseB})`, 'info');
+  }
+
   // Scan columns and find bands: columns whose color is significantly different from the base body color
   let bandSegments = [];
   let currentSegment = null;
@@ -783,21 +840,25 @@ function extractBandsFromResistor(src, rect) {
     bandSegments.push(currentSegment);
   }
   
+  if (isStatic) {
+    logDebug(`[저항 #${id}] 몸체 색상 편차 검출 완료 - 원시 색띠 구간 개수: ${bandSegments.length}개`, 'info');
+  }
+
   // Post-process segments: calculate average colors, filter by width
   const minBandWidth = Math.max(2, Math.round(smoothed.length * 0.015)); // at least 1.5% width
   const maxBandWidth = Math.round(smoothed.length * 0.22); // max 22% width
   
   let validBands = [];
-  bandSegments.forEach(seg => {
+  bandSegments.forEach((seg, idx) => {
     let width = seg.end - seg.start + 1;
+    let avgR = Math.round(seg.sumR / seg.count);
+    let avgG = Math.round(seg.sumG / seg.count);
+    let avgB = Math.round(seg.sumB / seg.count);
+    let avgH = Math.round(seg.sumH / seg.count);
+    let avgS = Math.round(seg.sumS / seg.count);
+    let avgV = Math.round(seg.sumV / seg.count);
+    
     if (width >= minBandWidth && width <= maxBandWidth) {
-      let avgR = Math.round(seg.sumR / seg.count);
-      let avgG = Math.round(seg.sumG / seg.count);
-      let avgB = Math.round(seg.sumB / seg.count);
-      let avgH = Math.round(seg.sumH / seg.count);
-      let avgS = Math.round(seg.sumS / seg.count);
-      let avgV = Math.round(seg.sumV / seg.count);
-      
       let colorName = classifyColor(avgR, avgG, avgB, avgH, avgS, avgV);
       validBands.push({
         centerX: seg.start + width / 2,
@@ -805,11 +866,22 @@ function extractBandsFromResistor(src, rect) {
         color: colorName,
         rgb: [avgR, avgG, avgB]
       });
+      if (isStatic) {
+        logDebug(`[저항 #${id}] - 세그먼트 #${idx+1} (폭: ${width}px, 기준: ${minBandWidth}~${maxBandWidth}px): RGB(${avgR}, ${avgG}, ${avgB}) HSV(${avgH}, ${avgS}%, ${avgV}%) ➔ 분류 결과: ${colorName}`, 'success');
+      }
+    } else {
+      if (isStatic) {
+        logDebug(`[저항 #${id}] - 세그먼트 #${idx+1} (폭: ${width}px, 기준: ${minBandWidth}~${maxBandWidth}px): 저항 크기 대비 폭 불충족 ➔ 제외`, 'warn');
+      }
     }
   });
   
   // Sort bands left-to-right
   validBands.sort((a, b) => a.centerX - b.centerX);
+  
+  if (isStatic) {
+    logDebug(`[저항 #${id}] 최종 정렬 및 분류된 색띠: [${validBands.map(b => b.color).join(', ')}]`, 'success');
+  }
   
   // Map to simple array of color strings
   return validBands.map(b => b.color);
