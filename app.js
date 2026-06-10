@@ -94,11 +94,11 @@ function init() {
   bindGenerator();
   populateReferenceTable();
 
-  // Watch for OpenCV ready event
-  document.addEventListener('opencvReady', () => {
+  // Handle OpenCV ready state
+  function handleOpenCvReady() {
+    if (isOpenCvReady) return; // avoid duplicate calls
     isOpenCvReady = true;
-    elOpencvBanner.classList.remove('loading');
-    elOpencvBanner.classList.add('ready');
+    elOpencvBanner.className = 'status-banner ready';
     elOpencvStatusText.textContent = 'OpenCV.js 이미지 프로세싱 엔진이 준비되었습니다.';
     elBtnToggleCamera.disabled = false;
     
@@ -106,11 +106,13 @@ function init() {
     setTimeout(() => {
       elOpencvBanner.style.display = 'none';
     }, 3000);
-  });
+  }
 
-  // Check if OpenCV is already loaded (fallback)
-  if (typeof cv !== 'undefined' && cv.Mat) {
-    document.dispatchEvent(new Event('opencvReady'));
+  // Watch for OpenCV ready event, checking if already ready (handles race condition)
+  if (window.cvReady || (typeof cv !== 'undefined' && cv.Mat)) {
+    handleOpenCvReady();
+  } else {
+    document.addEventListener('opencvReady', handleOpenCvReady);
   }
 
   // Draw default resistor in generator

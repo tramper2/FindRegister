@@ -367,10 +367,13 @@
 
   <!-- OpenCV.js load trigger -->
   <script type="text/javascript">
-    // Define callback before OpenCV loads
-    window.onOpenCvReady = function() {
-      console.log('OpenCV.js is fully ready and loaded!');
-      document.dispatchEvent(new Event('opencvReady'));
+    // Define Module object before loading the script to handle WASM initialization
+    var Module = {
+      onRuntimeInitialized: function() {
+        console.log('OpenCV.js is fully ready and loaded!');
+        window.cvReady = true;
+        document.dispatchEvent(new Event('opencvReady'));
+      }
     };
   </script>
   
