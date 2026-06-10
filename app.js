@@ -61,6 +61,7 @@ const elParsedTolText = document.getElementById('parsed-tol-text');
 const elBandsExpList = document.getElementById('bands-exp-list');
 const elSuggestionsBox = document.getElementById('generator-suggestions-box');
 const elSuggestionChips = document.getElementById('suggestion-chips');
+const elReferenceTableBody = document.getElementById('reference-table-body');
 
 // State Variables
 let isOpenCvReady = false;

@@ -1,17 +1,17 @@
 // Resistor Color Codes Data
 export const COLOR_CODES = {
-  black:  { value: 0, multiplier: 1,          tolerance: null,  hex: '#000000', label: 'Black' },
-  brown:  { value: 1, multiplier: 10,         tolerance: 1,     hex: '#8B4513', label: 'Brown' },
-  red:    { value: 2, multiplier: 100,        tolerance: 2,     hex: '#FF0000', label: 'Red' },
-  orange: { value: 3, multiplier: 1000,       tolerance: 0.05,  hex: '#FF8C00', label: 'Orange' },
-  yellow: { value: 4, multiplier: 10000,      tolerance: 0.02,  hex: '#FFD700', label: 'Yellow' },
-  green:  { value: 5, multiplier: 100000,     tolerance: 0.5,   hex: '#008000', label: 'Green' },
-  blue:   { value: 6, multiplier: 1000000,    tolerance: 0.25,  hex: '#0000FF', label: 'Blue' },
-  violet: { value: 7, multiplier: 10000000,   tolerance: 0.1,   hex: '#EE82EE', label: 'Violet' },
-  grey:   { value: 8, multiplier: 100000000,  tolerance: 0.01,  hex: '#808080', label: 'Grey' },
-  white:  { value: 9, multiplier: 1000000000, tolerance: null,  hex: '#FFFFFF', label: 'White' },
-  gold:   { value: -1, multiplier: 0.1,       tolerance: 5,     hex: '#D4AF37', label: 'Gold' },
-  silver: { value: -2, multiplier: 0.01,      tolerance: 10,    hex: '#C0C0C0', label: 'Silver' }
+  black:  { value: 0, multiplier: 1,          tolerance: null,  hex: '#000000', label: '검정 (Black)' },
+  brown:  { value: 1, multiplier: 10,         tolerance: 1,     hex: '#8B4513', label: '갈색 (Brown)' },
+  red:    { value: 2, multiplier: 100,        tolerance: 2,     hex: '#FF0000', label: '빨강 (Red)' },
+  orange: { value: 3, multiplier: 1000,       tolerance: 0.05,  hex: '#FF8C00', label: '주황 (Orange)' },
+  yellow: { value: 4, multiplier: 10000,      tolerance: 0.02,  hex: '#FFD700', label: '노랑 (Yellow)' },
+  green:  { value: 5, multiplier: 100000,     tolerance: 0.5,   hex: '#008000', label: '초록 (Green)' },
+  blue:   { value: 6, multiplier: 1000000,    tolerance: 0.25,  hex: '#0000FF', label: '파랑 (Blue)' },
+  violet: { value: 7, multiplier: 10000000,   tolerance: 0.1,   hex: '#EE82EE', label: '보라 (Violet)' },
+  grey:   { value: 8, multiplier: 100000000,  tolerance: 0.01,  hex: '#808080', label: '회색 (Grey)' },
+  white:  { value: 9, multiplier: 1000000000, tolerance: null,  hex: '#FFFFFF', label: '흰색 (White)' },
+  gold:   { value: -1, multiplier: 0.1,       tolerance: 5,     hex: '#D4AF37', label: '금색 (Gold)' },
+  silver: { value: -2, multiplier: 0.01,      tolerance: 10,    hex: '#C0C0C0', label: '은색 (Silver)' }
 };
 
 // Standard E24 base values (2 digits)
