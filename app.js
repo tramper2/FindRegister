@@ -484,8 +484,8 @@ function detectResistorsCV(src) {
   const mode = elColorSpace.value;
   
   if (mode === 'tan' || mode === 'both') {
-    // Widen range to cover orange, brown, red, yellow, gold bands on tan body
-    let lowTan = new cv.Mat(hsv.rows, hsv.cols, hsv.type(), [2, 10, 50, 0]);
+    // Widen range to cover orange, brown, red, yellow, gold bands on tan/pink body
+    let lowTan = new cv.Mat(hsv.rows, hsv.cols, hsv.type(), [0, 8, 40, 0]);
     let highTan = new cv.Mat(hsv.rows, hsv.cols, hsv.type(), [38, 255, 255, 0]);
     let maskTan = new cv.Mat();
     cv.inRange(hsv, lowTan, highTan, maskTan);
